@@ -15,8 +15,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Hiperparámetros
 lr_dir = 'LR'
 hr_dir = 'HR'
-pretrained_model_path = 'Previo/RRDB_ESRGAN_x3.pth'  # Ruta al modelo previamente entrenado
-model_save_path = 'models/RRDB_ESRGAN_x3.pth'
+model_save_dir = 'models'
 num_epochs = 50  # Número de épocas
 batch_size = 16  # Reducir el tamaño del lote para evitar problemas de memoria
 learning_rate = 1e-4
@@ -29,17 +28,28 @@ train_loader = get_data_loaders(lr_dir, hr_dir, batch_size=batch_size, num_worke
 model = RRDBNet(in_nc=3, out_nc=3, nf=64, nb=23, gc=32)
 model = model.to(device)
 
-# Cargar el modelo previamente entrenado si existe
-if os.path.exists(pretrained_model_path):
-    model.load_state_dict(torch.load(pretrained_model_path))
-    print(f'Modelo cargado desde {pretrained_model_path}')
-
 # Definir la función de pérdida y el optimizador
 criterion = nn.L1Loss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
+# Función para encontrar el último checkpoint guardado
+def find_last_checkpoint(model_save_dir):
+    checkpoints = [f for f in os.listdir(model_save_dir) if f.startswith('RRDB_ESRGAN_x3_epoch_')]
+    if not checkpoints:
+        return None, 0
+    checkpoints.sort()
+    last_checkpoint = checkpoints[-1]
+    last_epoch = int(last_checkpoint.split('_')[-1].split('.')[0])
+    return os.path.join(model_save_dir, last_checkpoint), last_epoch
+
+# Cargar el último checkpoint si existe
+last_checkpoint_path, start_epoch = find_last_checkpoint(model_save_dir)
+if last_checkpoint_path:
+    model.load_state_dict(torch.load(last_checkpoint_path))
+    print(f'Model loaded from {last_checkpoint_path}')
+
 # Bucle de entrenamiento
-for epoch in range(num_epochs):
+for epoch in range(start_epoch, num_epochs):
     model.train()
     epoch_loss = 0
     for lr_imgs, hr_imgs in tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}', unit='batch'):
@@ -47,7 +57,7 @@ for epoch in range(num_epochs):
 
         # Forward pass
         sr_imgs = model(lr_imgs)
-        sr_imgs = F.interpolate(sr_imgs, size=hr_imgs.shape[2:], mode='cubic', align_corners=False)
+        sr_imgs = F.interpolate(sr_imgs, size=hr_imgs.shape[2:], mode='bicubic', align_corners=False)
         loss = criterion(sr_imgs, hr_imgs)
 
         # Backward pass
@@ -61,7 +71,13 @@ for epoch in range(num_epochs):
     print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}')
 
     # Guardar el modelo después de cada época
-    torch.save(model.state_dict(), model_save_path)
-    print(f'Modelo guardado en {model_save_path}')
+    current_checkpoint_path = os.path.join(model_save_dir, f'RRDB_ESRGAN_x3_epoch_{epoch+1:03d}.pth')
+    torch.save(model.state_dict(), current_checkpoint_path)
+    
+    # Borrar el checkpoint anterior si no es el primer epoch
+    if epoch > start_epoch:
+        previous_checkpoint_path = os.path.join(model_save_dir, f'RRDB_ESRGAN_x3_epoch_{epoch:03d}.pth')
+        if os.path.exists(previous_checkpoint_path):
+            os.remove(previous_checkpoint_path)
 
 print('Entrenamiento completado y modelo guardado.')
